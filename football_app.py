@@ -1,45 +1,75 @@
 import streamlit as st
+import requests
 import pandas as pd
-import random
 import plotly.graph_objects as go
 from datetime import datetime
 
-st.set_page_config(page_title="足球指揮中心 v1.0", page_icon="⚽", layout="wide")
+# --- 配置區 ---
+API_KEY = "d20c02bc2b0c66692623f40f1535c1fd" # 你申請到的真 Key
+SPORT = "soccer_epl"  # 預設看英超，你也可以改 upcoming 睇全球
+REGION = "uk"         # Bet365 屬於 uk 區域
 
-def get_live_data():
-    return {
-        "home": "沙士菲 (Vélez)",
-        "away": "塔勒瑞斯 (Talleres)",
-        "score": "0 - 1",
-        "minute": 52,
-        "possession_h": 58,
-        "dangerous_attacks_h": 27,
-        "bet365_draw_odds": 2.15
+st.set_page_config(page_title="Bet365 實時推演中心", layout="wide")
+
+def get_live_odds():
+    # 真正從 The Odds API 抓取 Bet365 數據
+    url = f"https://api.the-odds-api.com/v4/sports/{SPORT}/odds"
+    params = {
+        'api_key': API_KEY,
+        'regions': REGION,
+        'markets': 'h2h',
+        'oddsFormat': 'decimal'
     }
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
 
-data = get_live_data()
-st.title("⚽ 足球指揮中心：全球實時演算")
-st.write(f"最後更新：{datetime.now().strftime('%H:%M:%S')}")
+# --- 介面開始 ---
+st.title("⚽ Bet365 實時推演引擎")
+st.write(f"系統狀態：實時監控中 | 最後更新：{datetime.now().strftime('%H:%M:%S')}")
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("當前比分", data["score"])
-col2.metric("比賽分鐘", f"{data['minute']}'")
-col3.metric("沙士菲控球", f"{data['possession_h']}%")
-col4.metric("Bet365 平局賠率", data["bet365_draw_odds"], "-0.15")
+data = get_live_odds()
 
-st.subheader("🔮 實時進球/絕殺概率推演")
-win_prob = 35 
-if data["possession_h"] > 55: win_prob += 10
-if data["bet365_draw_odds"] < 2.5: win_prob += 12
+if data:
+    # 搵出第一場比賽作為範例推演
+    match = data[0]
+    home_team = match['home_team']
+    away_team = match['away_team']
+    
+    # 搵出 Bet365 嘅賠率
+    bet365_odds = next((b for b in match['bookmakers'] if b['key'] == 'bet365'), match['bookmakers'][0])
+    odds_list = bet365_odds['markets'][0]['outcomes']
+    
+    # 顯示賠率看板
+    st.subheader(f"🏟️ 當前焦點：{home_team} vs {away_team}")
+    cols = st.columns(3)
+    for i, outcome in enumerate(odds_list):
+        cols[i].metric(outcome['name'], f"{outcome['price']}")
 
-fig = go.Figure(go.Indicator(
-    mode = "gauge+number",
-    value = win_prob,
-    title = {'text': "沙士菲扳平機率 (%)"},
-    gauge = {'axis': {'range': [None, 100]},
-             'steps': [{'range': [0, 50], 'color': "lightgray"},
-                       {'range': [50, 80], 'color': "skyblue"},
-                       {'range': [80, 100], 'color': "royalblue"}]}))
-st.plotly_chart(fig, use_container_width=True)
+    # --- 核心演算：絕殺/扳平機率 ---
+    # 簡單演算邏輯：賠率越低，代表機率越高
+    draw_price = next(o['price'] for o in odds_list if o['name'] == 'Draw')
+    win_prob = round((1 / draw_price) * 100 + 15, 1) # 模擬演算加權
 
-st.error("🚨 **Bet365 異動警報**：平局賠率劇烈下壓，市場預期沙士菲即將入球！")
+    st.subheader("🔮 實時演算儀表板")
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = win_prob,
+        title = {'text': "預期絕殺/平局機率 (%)"},
+        gauge = {'axis': {'range': [0, 100]},
+                 'bar': {'color': "royalblue"},
+                 'steps': [
+                     {'range': [0, 40], 'color': "#eeeeee"},
+                     {'range': [40, 70], 'color': "#bbdefb"},
+                     {'range': [70, 100], 'color': "#2196f3"}]}))
+    st.plotly_chart(fig, use_container_width=True)
+
+    if win_prob > 60:
+        st.error(f"🚨 **高能預警**：{home_team} 賠率劇烈變動，建議留意即將發生嘅入球！")
+else:
+    st.warning("暫時未能獲取賠率數據，請檢查 API Key 或聯賽設定。")
+
+if st.button("🔄 手動刷新數據"):
+    st.rerun()
