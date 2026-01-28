@@ -1,0 +1,5 @@
+// 偽代碼示例：獲取即時賽事列表
+Future<List<Match>> fetchLiveMatches() async {
+  final response = await http.get('YOUR_API_ENDPOINT/live');
+  // 解析 JSON 並映射到 Match 模型
+}
