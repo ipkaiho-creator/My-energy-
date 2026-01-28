@@ -2,106 +2,116 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# --- 配置區 ---
+# --- 核心配置 ---
 API_KEY = "d20c02bc2b0c66692623f40f1535c1fd" 
 
-st.set_page_config(page_title="足球全功能戰術分析儀", layout="wide")
+st.set_page_config(page_title="足球全能指揮中心", layout="wide", page_icon="⚽")
 
-# --- 側邊欄控制 ---
+# --- CSS 美化 ---
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 側邊欄 ---
 st.sidebar.title("🎮 戰術操控台")
-app_mode = st.sidebar.selectbox("切換功能", ["🌍 API 實時監控", "🧠 手動養成推演"])
-
-# --- 核心演算函數 ---
-def calculate_advanced_win_prob(h_score, a_score, h_danger, a_danger, h_red, a_red, h_poss, h_odds):
-    """
-    養成大模組公式：
-    基礎機率 + 壓力加權 - 紅牌懲罰 + 控球加權
-    """
-    # 1. 基礎機率 (由賠率導出)
-    base_prob = (1 / h_odds) * 100 if h_odds > 0 else 50
-    
-    # 2. 壓力加權 (危險進攻差)
-    pressure_bonus = (h_danger - a_danger) * 0.4
-    
-    # 3. 紅牌懲罰 (極重要：少一人機率大幅下降)
-    red_card_penalty = (h_red * 15) - (a_red * 15)
-    
-    # 4. 控球率加權
-    possession_bonus = (h_poss - 50) * 0.2
-    
-    # 5. 總分計算
-    final_prob = base_prob + pressure_bonus - red_card_penalty + possession_bonus
-    return max(min(final_prob, 99.0), 1.0) # 限制在 1-99% 之間
+app_mode = st.sidebar.radio("切換功能", ["🌍 API 實時監控", "🧠 手動養成推演"])
 
 # --- 模式 1：API 實時監控 ---
 if app_mode == "🌍 API 實時監控":
-    st.title("📊 聯賽實時數據中心")
-    league = st.sidebar.selectbox("選擇聯賽", ["soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a"])
+    st.title("🏟️ 聯賽實時數據中心")
     
-    # (API 抓取邏輯同之前一樣，此處略過節省空間，保持穩定運作)
-    st.info("系統正透過 The Odds API 監控最新賠率。")
-    # ...[API Fetch 代碼]...
+    league_dict = {
+        "英超 (EPL)": "soccer_epl",
+        "西甲 (La Liga)": "soccer_spain_la_liga",
+        "意甲 (Serie A)": "soccer_italy_serie_a",
+        "德甲 (Bundesliga)": "soccer_germany_bundesliga",
+        "法甲 (Ligue 1)": "soccer_france_ligue_1"
+    }
+    selected_league = st.sidebar.selectbox("選擇監控聯賽", list(league_dict.keys()))
+    
+    @st.cache_data(ttl=60) # 每分鐘才真正請求一次 API，節省額度並加快速度
+    def get_data(sport_key):
+        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+        params = {'api_key': API_KEY, 'regions': 'uk', 'markets': 'h2h'}
+        res = requests.get(url, params=params)
+        return res.json() if res.status_code == 200 else []
 
-# --- 模式 2：手動養成推演 (重點！) ---
+    data = get_data(league_dict[selected_league])
+
+    if data:
+        st.success(f"✅ 已成功連接 {selected_league} 數據流")
+        for match in data:
+            # 轉換時間
+            start_time = datetime.strptime(match['commence_time'], "%Y-%m-%dT%H:%M:%SZ") + timedelta(hours=8)
+            
+            with st.container():
+                st.markdown(f"### {match['home_team']} vs {match['away_team']}")
+                st.caption(f"📅 開賽時間：{start_time.strftime('%Y-%m-%d %H:%M')}")
+                
+                # 提取 Bet365
+                b365 = next((b for b in match['bookmakers'] if b['key'] == 'bet365'), match['bookmakers'][0])
+                odds = {o['name']: o['price'] for o in b365['markets'][0]['outcomes']}
+                
+                c1, c2, c3, c4 = st.columns([1,1,1,2])
+                c1.metric("🏠 主勝", odds.get(match['home_team']))
+                c2.metric("🤝 和局", odds.get('Draw'))
+                c3.metric("🚀 客勝", odds.get(match['away_team']))
+                
+                # 計算隱含機率
+                draw_prob = (1 / odds.get('Draw')) * 100
+                c4.progress(draw_prob / 100, text=f"📊 市場預期平局率: {draw_prob:.1f}%")
+                st.divider()
+    else:
+        st.error("❌ 無法獲取數據，請檢查 API 額度或稍後再試。")
+
+# --- 模式 2：手動養成推演 ---
 else:
-    st.title("🧠 戰術養成大模組")
-    st.write("手動輸入現場觀察到的數據，進行深度演算。")
+    st.title("🧠 深度戰術養成推演")
     
-    with st.form("manual_analysis"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("### 🏠 主隊 (Home)")
-            h_team = st.text_input("球隊名", "沙士菲")
-            h_score = st.number_input("目前比分", 0, 10, 0, key="h1")
-            h_red = st.number_input("🔴 紅牌數量", 0, 5, 0, key="h2")
-            h_poss = st.slider("⚽ 控球率 (%)", 0, 100, 50)
-            
-        with c2:
-            st.markdown("### 🚀 客隊 (Away)")
-            a_team = st.text_input("球隊名 ", "塔勒瑞斯")
-            a_score = st.number_input("目前比分 ", 0, 10, 1, key="a1")
-            a_red = st.number_input("🔴 紅牌數量 ", 0, 5, 0, key="a2")
-            
-        with c3:
-            st.markdown("### 📈 市場數據")
-            h_odds = st.number_input("主勝即時賠率", 1.0, 50.0, 2.5)
-            h_danger = st.number_input("主隊危險進攻", 0, 200, 35)
-            a_danger = st.number_input("客隊危險進攻", 0, 200, 28)
+    with st.container():
+        col_a, col_b = st.columns(2)
+        with col_a:
+            h_name = st.text_input("🏠 主隊", "沙士菲")
+            h_score = st.number_input("比分", 0, 10, 0, key="h_s")
+            h_red = st.number_input("🔴 紅牌", 0, 5, 0, key="h_r")
+            h_danger = st.slider("🔥 危險進攻", 0, 100, 30)
+        with col_b:
+            a_name = st.text_input("🚀 客隊", "塔勒瑞斯")
+            a_score = st.number_input("比分 ", 0, 10, 1, key="a_s")
+            a_red = st.number_input("🔴 紅牌 ", 0, 5, 0, key="a_r")
+            a_poss = st.slider("⚽ 控球率 (%)", 0, 100, 50)
 
-        submitted = st.form_submit_button("🔥 執行深度養成演算")
-
-    if submitted:
-        # 執行計算
-        prob = calculate_advanced_win_prob(h_score, a_score, h_danger, a_danger, h_red, a_red, h_poss, h_odds)
+        h_odds = st.number_input("即時主勝賠率", 1.0, 50.0, 2.8)
         
-        # 顯示結果
-        st.divider()
-        res_col1, res_col2 = st.columns([2, 1])
-        
-        with res_col1:
-            fig = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = prob,
-                domain = {'x': [0, 1], 'y': [0, 1]},
-                title = {'text': f"{h_team} 實時勝率/反超預測"},
-                gauge = {
-                    'axis': {'range': [0, 100]},
-                    'bar': {'color': "darkred" if h_red > a_red else "darkblue"},
-                    'steps': [
-                        {'range': [0, 30], 'color': "#ffcccc"},
-                        {'range': [30, 70], 'color': "#fff3cd"},
-                        {'range': [70, 100], 'color': "#d4edda"}]
-                }
-            ))
-            st.plotly_chart(fig, use_container_width=True)
+        if st.button("🔥 執行 AI 戰術演算"):
+            # 演算邏輯：基礎賠率機率 + 壓力加權 - 紅牌懲罰
+            prob = (1/h_odds)*100 + (h_danger * 0.5) - (h_red * 20) + (a_red * 20) + (h_poss - 50)*0.3
+            prob = max(min(prob, 98.0), 2.0)
 
-        with res_col2:
-            st.subheader("📋 戰術診斷")
-            if h_red > a_red:
-                st.error(f"❗ **人數劣勢**：{h_team} 少打一人，勝率已自動下調 15%。")
-            if h_danger > a_danger * 1.5:
-                st.success(f"⚡ **進攻壓制**：{h_team} 正處於狂攻狀態，絕殺機會增加。")
-            if h_poss > 60:
-                st.info(f"🏟️ **控球優勢**：比賽節奏由 {h_team} 掌控。")
+            st.divider()
+            res_c1, res_c2 = st.columns([2,1])
+            with res_c1:
+                fig = go.Figure(go.Indicator(
+                    mode = "gauge+number",
+                    value = prob,
+                    title = {'text': f"{h_name} 反超/扳平指數"},
+                    gauge = {
+                        'axis': {'range': [0, 100]},
+                        'bar': {'color': "#1f77b4"},
+                        'steps': [
+                            {'range': [0, 40], 'color': "#f8d7da"},
+                            {'range': [40, 75], 'color': "#fff3cd"},
+                            {'range': [75, 100], 'color': "#d4edda"}]
+                    }
+                ))
+                st.plotly_chart(fig, use_container_width=True)
+            with res_c2:
+                st.subheader("📝 AI 診斷")
+                if h_red > a_red: st.error("⚠️ 人數劣勢：勝率大幅下降")
+                if h_danger > 50: st.success("🔥 狂攻模式：進球預期極高")
+                st.write(f"當前演算顯示 {h_name} 有 `{prob:.1f}%` 的機會改變戰局。")
